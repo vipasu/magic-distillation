@@ -98,12 +98,15 @@ def tensor_n(state, n):
         new_state = new_state.tensor(state)
     return new_state
 
-def repeat_distill(qubit, n=1):
-    new_in = tensor_n(qubit, 5)
+def repeat_distill(state, n=1, full=False):
+    if not full:
+        new_in = tensor_n(state, 5)
+    else:
+        new_in = state
     new_out = distill(new_in)
     new_out_qubit = qi.partial_trace(new_out, range(4))
-    print(magic_fidelity(new_out_qubit, 1))
+    print("Fidelity with T1 state: ", magic_fidelity(new_out_qubit, 1))
     if n == 1:
         return new_out_qubit
     else:
-        return repeat_distill(new_out_qubit, n-1)
+        return repeat_distill(new_out_qubit, n-1, False)
