@@ -3,6 +3,9 @@ import numpy as np
 import qiskit.quantum_info as qi
 from qiskit.quantum_info.operators import Operator
 from qiskit.quantum_info.states import statevector
+import qiskit.circuit.library as qlib
+from qiskit.providers.aer import QasmSimulator, StatevectorSimulator, UnitarySimulator
+from qiskit import Aer, execute
 
 
 I = [[1,0],[0, 1]]
@@ -17,8 +20,8 @@ c = np.cos(beta)
 s = np.sin(beta)
 t0 = statevector.Statevector(np.array([c, np.exp(1j * np.pi/4) * s]))
 t1 = statevector.Statevector(np.array([s, -np.exp(1j * np.pi/4) * c]))
-
-
+zero_state = statevector.Statevector(np.array([1, 0]))
+one_state = statevector.Statevector(np.array([0, 1]))
 
 
 def distill_circuit():
@@ -78,6 +81,8 @@ def magic_fidelity(dm, direction=None):
     elif direction == 1:
         return qi.state_fidelity(t1, dm)
     else:
+        if not dm.is_valid():
+            print(dm)
         return max(qi.state_fidelity(t0, dm), qi.state_fidelity(t1, dm))
 
 def compare_fidelity(initial, final):
@@ -98,15 +103,70 @@ def tensor_n(state, n):
         new_state = new_state.tensor(state)
     return new_state
 
-def repeat_distill(state, n=1, full=False):
+def repeat_distill(state, n=1, full=False, verbose=True, return_qubit=False, direction=None):
     if not full:
         new_in = tensor_n(state, 5)
     else:
         new_in = state
     new_out = distill(new_in)
     new_out_qubit = qi.partial_trace(new_out, range(4))
-    print("Fidelity with T1 state: ", magic_fidelity(new_out_qubit, 1))
-    if n == 1:
-        return new_out_qubit
+    fid = magic_fidelity(new_out_qubit, direction=direction)
+    if return_qubit:
+        ret = new_out_qubit
     else:
-        return repeat_distill(new_out_qubit, n-1, False)
+        ret = fid
+
+    if verbose:
+        if direction:
+            print("T_{direction} fidelity: ",fid)
+        else:
+            print("Maximum T fidelity: ", fid)
+
+
+    if n == 1:
+        return [ret]
+    else: # return list of all results
+        final = [ret]
+        final.extend(repeat_distill(new_out_qubit, n-1, full=False, verbose=verbose, return_qubit=return_qubit, direction=direction))
+        return final
+
+def successful_distillation(state, n, full=False, verbose=False):
+    fid = repeat_distill(state, n, full, verbose)
+    if fid >= .99:
+        return True
+    else:
+        print(fid)
+        return False
+
+
+def create_ghz_t(alpha, n):
+    beta = np.sqrt(1 - alpha**2)
+    return alpha * tensor_n(t0, n) + beta * tensor_n(t1, n)
+
+
+def create_ghz_phase(alpha, n):
+    beta = np.sqrt(1 - alpha**2)
+    return alpha * tensor_n(zero_state, n) + np.exp(1j * np.pi/4) * beta * tensor_n(one_state, n)
+
+def hypergraph_to_circuit(hg, n):
+    circuit = qiskit.QuantumCircuit(n)
+    for i in range(n): # initialize to all |+> state
+        circuit.h(i)
+
+    for h_edge in hg:
+        # Apply C^k Z
+        k = len(h_edge)
+        if k > 1:
+            circuit.append(qlib.ZGate().control(k-1), h_edge)
+        else: # a single node hyperedge is a z_gate
+            circuit.z(h_edge[0])
+    return circuit
+
+def hypergraph_to_state(hg, n):
+    """Create a hypergraph state from input hg (set of hyperedges)
+    hg should be a list of lists.
+    """
+    circ = hypergraph_to_circuit(hg, n)
+    simulator = Aer.get_backend('statevector_simulator')
+    result = execute(circ, simulator).result()
+    return statevector.Statevector(result.get_statevector())
